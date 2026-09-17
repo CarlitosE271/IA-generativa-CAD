@@ -1,0 +1,26 @@
+# Virtual enviroments
+general_motors/
+.venv/
+env/
+.env.local
+.env
+
+
+# Python compiled and cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyc
+*$py.class
+dist/
+build/
+*.so
+
+
+# OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
