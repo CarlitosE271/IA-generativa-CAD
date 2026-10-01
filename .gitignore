@@ -24,3 +24,11 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+
+# Documentos de GM (confidenciales): PDF originales y sus conversiones a Markdown
+data/docs/
+data/geometria/
+tests/
+src/costos/
+src/interfaz

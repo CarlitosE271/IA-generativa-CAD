@@ -1,0 +1,7 @@
+{
+  "r_min_mm": 45.0,
+  "area_min_mm2": 333.0,
+  "area_max_mm2": 1500.0,
+  "aspect_ratio_max": 3.0,
+  "draft_angle_deg": 2.5
+}
