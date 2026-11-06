@@ -21,6 +21,7 @@ Flujo del human-in-the-loop:
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -33,8 +34,22 @@ from langgraph.types import Command, interrupt
 # Permite ejecutar `python src/LLM/agente.py` desde cualquier carpeta: agrega src/ al path
 # para poder importar el paquete hermano `herramientas` (funciones puras, sin LangChain).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# visualizar_ruteo.py (de Fer) hace `import ruteo_astar` sin paquete: se agrega tambien herramientas/ al path
+# para que TODOS usen el MISMO modulo ruteo_astar (si hubiera dos copias, tendrian entornos distintos).
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "herramientas"))
 from herramientas import documentos  # noqa: E402
 from herramientas import geometria  # noqa: E402
+from herramientas import auditoria  # noqa: E402  (bitacora JSONL de aprobaciones humanas)
+from cad import curva_ruta, informe_ducto  # noqa: E402
+from cad import ducto as ducto_cad  # noqa: E402
+
+try:  # entorno de bloques y A* (Fer). Si faltan sus archivos, las demas herramientas siguen funcionando.
+    import ruteo_astar  # noqa: E402
+    RAIZ_PROYECTO = Path(__file__).resolve().parents[2]
+    # El entorno vive en data/ del PROYECTO (no junto al archivo de Fer): lo comparten la interfaz de bloques y el agente
+    ruteo_astar.configurar_ruta_entorno(RAIZ_PROYECTO / "data" / "entorno" / "entorno.json")
+except ImportError:
+    ruteo_astar = None
 
 DEBUG = False  # True para imprimir el resultado crudo de cada invoke()
 
@@ -44,8 +59,10 @@ DEBUG = False  # True para imprimir el resultado crudo de cada invoke()
 # ----
 
 
+NOMBRE_MODELO_LLM = "llama3.1"  # una sola fuente: lo usa ChatOllama y lo anota la bitacora de auditoria
+
 modelo = ChatOllama( # Superior a OllamaLLM, pues permite manejar tool calling y mensajes
-    model="llama3.1", # Si quieres otro modelo solo coloca ollama pull -modelo-
+    model=NOMBRE_MODELO_LLM, # Si quieres otro modelo solo cambia la constante de arriba (y ollama pull -modelo-)
     temperature=0,  # Genera respuestas reales, cuando temperature es igual a 0, menos creativas son las respuestas
     num_ctx=8192,   # si es pequeno, Ollama recorta el texto sin avisar
 )
@@ -58,6 +75,7 @@ modelo = ChatOllama( # Superior a OllamaLLM, pues permite manejar tool calling y
 
 # parents[2] sube de LLM -> src -> raiz del proyecto
 RUTA_PARAMETROS = Path(__file__).resolve().parents[2] / "data" / "parametros_aprobados.json"
+RUTA_SALIDAS = Path(__file__).resolve().parents[2] / "data" / "salidas"  # PNG de las rutas (los CAD van a data/cad)
 
 # Funciones auxiliares
 def _cargar_parametros() -> dict:
@@ -86,6 +104,55 @@ PARAMETROS: dict = _cargar_parametros()  # solo contiene los parametros validado
 # ----
 
 
+def _auditar(
+    tipo: str, decision: dict, propuesta: dict, finales: dict | None, anteriores: dict | None = None,
+    id_evento: str | None = None,
+) -> str:
+    """Anota en la bitacora (data/auditoria/aprobaciones.jsonl) la decision del humano.
+    Se llama SIEMPRE despues de que interrupt() devolvio la decision (nunca antes: al reanudar, la herramienta
+    se reejecuta desde el principio y se anotaria dos veces). Nunca lanza: la aprobacion ya ocurrio y no debe
+    perderse por un disco lleno; si falla, devuelve un aviso que el LLM le pasa al usuario ('' si todo bien)."""
+    try:
+        auditoria.registrar(auditoria.construir_evento(tipo, decision, propuesta, finales, anteriores, id_evento))
+    except Exception as e:
+        return f" AVISO: no se pudo escribir la bitacora de auditoria ({e}). Avisale al usuario."
+    return ""
+
+
+def _auditar_resultado(ficha: dict, resultado: dict, generar_si_infactible: bool = False) -> str:
+    """Anota que paso DESPUES de aprobar un ducto (estado, nombre, archivos), con el id de la aprobacion y el
+    contexto para reproducirlo. Mismo trato que _auditar: nunca lanza; devuelve '' o un aviso para el LLM."""
+    contexto = {
+        "parametros_vigentes": dict(PARAMETROS),
+        "modelo_llm": NOMBRE_MODELO_LLM,
+        "campo_costo": "ninguno",  # generar_ducto todavia no le pasa campo_costo al A*; actualizar si se conecta la C_NN
+        "generar_si_infactible": generar_si_infactible,
+    }
+    try:
+        auditoria.registrar(
+            auditoria.construir_resultado(ficha["id"], "ducto", ficha["operador"], resultado, contexto)
+        )
+    except Exception as e:
+        return f" AVISO: no se pudo escribir la bitacora de auditoria ({e}). Avisale al usuario."
+    return ""
+
+
+def _resumen_de_reporte(reporte: dict) -> dict:
+    """Lo esencial de un reporte de ducto para la bitacora (sin la geometria ni las holguras completas)."""
+    rc = reporte.get("radio_curvatura") or {}
+    resumen = {
+        "estado": reporte.get("estado"),
+        "nombre": reporte.get("nombre"),
+        "archivos": reporte.get("archivos"),
+        "longitud_mm": reporte.get("longitud_mm"),
+        "solido_valido": reporte.get("solido_valido"),
+        "radio_minimo_mm": rc.get("radio_minimo_mm"),
+        "r_min_exigido_mm": rc.get("r_min_exigido_mm"),
+        "mensaje": reporte.get("mensaje"),
+    }
+    return {k: v for k, v in resumen.items() if v is not None}
+
+
 def _aprobar_y_guardar(propuesta: dict) -> str:
     """Pausa para que el usuario decida si aprobar, editar o rechazar y, solo y solo si aprueba o edita,
     guarda los valores. Devuelve el texto que el LLM leera como resultado de la herramienta.
@@ -103,6 +170,7 @@ def _aprobar_y_guardar(propuesta: dict) -> str:
     )
 
     tipo = decision.get("decision") # Lee la clave "decision" del diccionario que armo pedir_decision
+    anteriores = dict(PARAMETROS)  # foto de lo aprobado ANTES de esta decision (para la bitacora)
 
     # En caso de editar se sobreescriben los valores
     if tipo == "approve":
@@ -112,14 +180,16 @@ def _aprobar_y_guardar(propuesta: dict) -> str:
         finales = {**propuesta, **decision.get("valores", {})}
     else:  # "reject" (o cualquier otra cosa por si las dudas, no se guarda nada)
         motivo = decision.get("motivo") or "sin motivo" # Esto es por si el usuario quiere dar algún motivo de su cancelacion
+        aviso = _auditar("parametros", decision, propuesta, None, anteriores)  # tambien se anotan los rechazos
         return (
             f"El usuario RECHAZO los parametros porque: ({motivo}). "
-            "No se registro nada. Preguntar al usuario por los valores correctos."
+            "No se registro nada. Preguntar al usuario por los valores correctos." + aviso
         )
 
     # finales es el diccionario que se guarda
     PARAMETROS.update(finales)  # El efecto ocurre despues de la aprobacion
     _guardar_parametros(PARAMETROS)  # y se escribe en disco
+    aviso = _auditar("parametros", decision, propuesta, finales, anteriores)  # primero se guarda, luego se anota
 
     if tipo == "edit":
         # Este texto es lo que el LLM lee. Sin esto, el LLM "recuerda" los valores originales
@@ -127,9 +197,9 @@ def _aprobar_y_guardar(propuesta: dict) -> str:
         return (
             "El usuario corrigió algunos valores antes de aprobar. "
             f"Valores finales registrados: {json.dumps(PARAMETROS)}. "
-            "Usa estos valores de ahora en adelante, no los de mensajes anteriores."
+            "Usa estos valores de ahora en adelante, no los de mensajes anteriores." + aviso
         )
-    return f"Parametros registrados: {json.dumps(PARAMETROS)}"  # Convierte el diccionario PARAMETROS en un json
+    return f"Parametros registrados: {json.dumps(PARAMETROS)}" + aviso  # Convierte el diccionario PARAMETROS en un json
 
 
 @tool
@@ -260,6 +330,143 @@ def procesar_geometria() -> str:
     return "Geometria en data/geometria/step:\n" + "\n".join(lineas) # Manda la informacion de las geometrias procesadas
 
 
+# ---- Entorno de bloques, ruta y ducto ------------------------------------------------------------------
+# consultar_entorno y calcular_ruta SOLO LEEN. generar_ducto escribe archivos CAD, asi que pasa por la misma
+# aprobacion humana (aprobar/editar/rechazar) que los parametros: los numeros que propone el LLM (puntos,
+# seccion, espesor) se revisan contra lo que el usuario escribio, para atrapar valores inventados.
+
+# return_direct=True en las dos de LECTURA: su texto (ya verificado, con los numeros calculados) es LA respuesta;
+# el modelo local no lo vuelve a redactar. Ronda 1-2 del diagnostico: llama3.1 a veces se bloquea ("Lo siento, no
+# puedo continuar") justo en ese segundo paso aunque la herramienta funciono, y asi ademas se ahorran 5-15 s.
+_FALTA_RUTEO = "El modulo del entorno (ruteo_astar.py) no esta instalado en src/herramientas."
+
+
+@tool(return_direct=True)
+def consultar_entorno() -> str:
+    """Lista los bloques del entorno 3D (motor, bateria, chasis...) con su tipo (termico, electrico, neutro),
+    valor, centro y tamano en mm. Usala cuando el usuario pregunte que hay en el entorno o antes de
+    calcular una ruta. Solo lee: los bloques los coloca el usuario en la interfaz de bloques. No recibe argumentos."""
+    if ruteo_astar is None:
+        return _FALTA_RUTEO
+    return informe_ducto.texto_entorno(ruteo_astar.listar_bloques())
+
+
+@tool(return_direct=True)
+def calcular_ruta(inicio: list[float], fin: list[float], radio_ducto_mm: float = 0.0) -> str:
+    """Calcula con el A* la ruta mas corta entre dos puntos del entorno, esquivando los bloques, y dibuja un
+    esquema 3D. Devuelve la ruta CRUDA (en zigzag), NO es todavia el ducto: para el ducto usa generar_ducto.
+    Solo lee, no cambia nada.
+
+    Args:
+        inicio: punto de inicio [x, y, z] en mm. Debe darlo el usuario.
+        fin: punto final [x, y, z] en mm. Debe darlo el usuario.
+        radio_ducto_mm: holgura extra alrededor del ducto en mm (0 si el usuario no la menciona).
+    """
+    if ruteo_astar is None:
+        return _FALTA_RUTEO
+    try:
+        p0, p1 = informe_ducto.punto_3d(inicio, "inicio"), informe_ducto.punto_3d(fin, "fin")
+    except ValueError as e:
+        return str(e)
+    res = ruteo_astar.calculo_ruta(p0, p1, {"radio_ducto_mm": max(0.0, float(radio_ducto_mm))})
+    imagen = None
+    if res["estado"] == "ok":
+        try:  # el dibujo es opcional: sin matplotlib se responde igual, solo sin imagen
+            import visualizar_ruteo
+            png = RUTA_SALIDAS / f"ruta_{uuid.uuid4().hex[:8]}.png"
+            salida = visualizar_ruteo.visualizar_ruta(p0, p1, {"radio_ducto_mm": max(0.0, float(radio_ducto_mm))}, ruta_png=str(png))
+            imagen = salida.get("imagen")
+        except ImportError:
+            pass
+    return informe_ducto.texto_ruta(res, imagen)
+
+
+def _aprobar_ducto(propuesta: dict):
+    """Pausa para que el usuario apruebe/edite/rechace los datos del ducto. Devuelve (resultado, aviso, ficha):
+    resultado es la propuesta final, o un str (lo que lee el LLM) si el usuario rechazo; aviso es '' o el texto
+    de la bitacora si fallo (ver _auditar); ficha = {"id", "operador"} de la aprobacion para enlazar la linea de
+    resultado (None si se rechazo: no hay nada que generar). Mismo contrato de pausa que _aprobar_y_guardar."""
+    decision = interrupt(
+        {
+            "tipo": "aprobar_ducto",
+            "propuesta": propuesta,
+            "actuales": {},  # nada que sobreescribir: asi TODOS los numeros se revisan contra lo que dijo el usuario
+            "mensaje": "El agente propone generar un ducto con estos datos (todo en mm). Se creara un STEP/STL.",
+        }
+    )
+    tipo = decision.get("decision")
+    ficha = {"id": auditoria.nuevo_id(), "operador": auditoria.operador_de(decision)}
+    if tipo == "approve":
+        return propuesta, _auditar("ducto", decision, propuesta, propuesta, id_evento=ficha["id"]), ficha
+    if tipo == "edit":
+        final = {**propuesta, **decision.get("valores", {})}
+        return final, _auditar("ducto", decision, propuesta, final, id_evento=ficha["id"]), ficha
+    motivo = decision.get("motivo") or "sin motivo"
+    aviso = _auditar("ducto", decision, propuesta, None, id_evento=ficha["id"])
+    texto = f"El usuario RECHAZO generar el ducto porque: ({motivo}). No se genero nada. Preguntale que quiere cambiar."
+    return texto + aviso, "", None
+
+
+@tool
+def generar_ducto(
+    inicio: list[float],
+    fin: list[float],
+    ancho_mm: float,
+    alto_mm: float,
+    espesor_mm: float,
+    generar_si_infactible: bool = False,
+) -> str:
+    """Genera el ducto rectangular hueco (STEP y STL) entre dos puntos del entorno: calcula la ruta con el A*,
+    la redondea con arcos que cumplen el radio minimo aprobado (r_min_mm) y revisa colisiones con los bloques.
+    Necesita parametros ya aprobados (registrar_parametros). El usuario aprueba los datos antes de generar.
+    Si el resultado es INFACTIBLE, anuncialo, explica las propuestas y pregunta al usuario cual elige: no decidas tu.
+
+    Args:
+        inicio: punto de inicio [x, y, z] en mm. Debe darlo el usuario.
+        fin: punto final [x, y, z] en mm. Debe darlo el usuario.
+        ancho_mm: ancho de la seccion rectangular en mm. Debe darlo el usuario.
+        alto_mm: alto de la seccion rectangular en mm. Debe darlo el usuario.
+        espesor_mm: espesor de pared en mm. Debe darlo el usuario.
+        generar_si_infactible: true SOLO si el usuario ya eligio generar el ducto aunque no cumpla R_min.
+    """
+    if ruteo_astar is None:
+        return _FALTA_RUTEO
+    if "r_min_mm" not in PARAMETROS:
+        return "Todavia no hay parametros aprobados (r_min_mm). Primero registra los parametros con registrar_parametros."
+    try:
+        propuesta = informe_ducto.propuesta_de_ducto(inicio, fin, ancho_mm, alto_mm, espesor_mm)
+    except ValueError as e:
+        return str(e)
+
+    # Antes de interrupt() no hay efectos; al reanudar, LangGraph reejecuta desde el principio (ver _aprobar_y_guardar).
+    # Importante: interrupt() NUNCA va dentro de un try/except, porque la pausa es una excepcion.
+    final, aviso, ficha = _aprobar_ducto(propuesta)
+    if isinstance(final, str):
+        return final
+    p0, p1, ancho, alto, espesor = informe_ducto.argumentos_de_propuesta(final)
+
+    nombre = "ducto_" + uuid.uuid4().hex[:6]
+    try:
+        reporte = curva_ruta.ducto_desde_entorno(
+            p0, p1, ancho, alto, espesor, parametros=dict(PARAMETROS),
+            nombre=nombre, generar_si_infactible=generar_si_infactible,
+        )
+    except ModuleNotFoundError as e:  # p. ej. falta cadquery
+        aviso += _auditar_resultado(ficha, {"estado": "error", "nombre": nombre, "mensaje": f"falta una libreria: {e}"},
+                                    generar_si_infactible)
+        return f"No se pudo generar el ducto: falta una libreria ({e}). Avisale al usuario." + aviso
+    except ValueError as e:  # espesor imposible, ruta invalida, etc.
+        aviso += _auditar_resultado(ficha, {"estado": "error", "nombre": nombre, "mensaje": str(e)}, generar_si_infactible)
+        return f"No se pudo generar el ducto: {e}" + aviso
+
+    aviso += _auditar_resultado(ficha, {"nombre": nombre, **_resumen_de_reporte(reporte)}, generar_si_infactible)
+    rutas_cad = [str(ducto_cad.ruta_cad / n) for n in reporte.get("archivos", {}).values()]
+    texto = informe_ducto.texto_reporte(reporte, rutas_cad)
+    if final != propuesta:  # igual que en parametros: que el LLM sepa que el usuario corrigio algo
+        texto = "El usuario corrigio algunos datos antes de aprobar; estos son los usados: " + json.dumps(final) + "\n" + texto
+    return texto + aviso
+
+
 # Estas herramientas seran utilizadas posteriormente
 HERRAMIENTAS = [
     registrar_parametros,
@@ -268,6 +475,9 @@ HERRAMIENTAS = [
     procesar_documentos,
     buscar_en_documentos,
     procesar_geometria,
+    consultar_entorno,
+    calcular_ruta,
+    generar_ducto,
 ]
 
 
@@ -303,7 +513,15 @@ SYSTEM_PROMPT = (
     "Si el usuario dice que agrego un PDF, usa procesar_documentos. "
     "Si el usuario dice que agrego un archivo STEP (.step/.stp) o pide procesar la geometria, "
     "usa procesar_geometria; esa herramienta solo da un resumen (bounding box, unidades, "
-    "piezas), nunca inventes esos numeros tampoco."
+    "piezas), nunca inventes esos numeros tampoco. "
+    "Para saber que bloques hay en el entorno usa consultar_entorno. Para una ruta cruda del A* usa "
+    "calcular_ruta. Para generar el ducto usa generar_ducto; necesita parametros aprobados y que el usuario te "
+    "haya dado inicio, fin, ancho, alto y espesor: si falta alguno preguntalo, nunca lo supongas. "
+    "Si generar_ducto devuelve INFACTIBLE, anuncialo, resume las propuestas con los numeros que te dio la "
+    "herramienta y PREGUNTA al usuario cual quiere; nunca cambies r_min por tu cuenta (si elige bajar R_min usa "
+    "actualizar_parametro y deja que el usuario lo apruebe). "
+    "Los resultados de estas herramientas traen marcas entre corchetes como [IMAGEN_RUTA: ...] o "
+    "[ARCHIVO_CAD: ...]: NUNCA las repitas, la interfaz muestra esos archivos sola."
 )
 
 agente = create_agent( # conecta todo lo que hemos creado
@@ -344,7 +562,8 @@ def _limpiar_respuesta(texto: str) -> str:
     Separada de chat() para poder reutilizarla tambien desde la interfaz web (src/interfaz/app.py)."""
     # Busca un patron en el texto y lo sustituye
     # Busca un corchete lo que se encunetra en el estado actual
-    return re.sub(r"\[(?:Contexto interno|ESTADO ACTUAL)[^\]]*\]", "", texto).strip()
+    texto = re.sub(r"\[(?:Contexto interno|ESTADO ACTUAL)[^\]]*\]", "", texto)
+    return informe_ducto.quitar_marcas(texto).strip()  # tambien las marcas [IMAGEN_RUTA: ...]/[ARCHIVO_CAD: ...]
 
 
 def _numeros(texto: str) -> set[float]:

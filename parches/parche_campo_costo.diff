@@ -1,0 +1,81 @@
+--- ruteo_astar.py (original)
++++ ruteo_astar.py (con campo_costo)
+@@ -333,7 +333,11 @@
+     "margen_mm": 300.0,            # espacio extra alrededor del entorno
+     "max_nodos": 400000,           # tope de nodos para que no se cicle
+     "distancia_cercania_mm": 100.0,  # para llenar bloques_cercanos
++    "lambda_campo": 2.0,           # cuanto pesa campo_costo (solo si se pasa uno): costo = 1 + ... + lambda * C
+ }
++
++# tope de celdas para evaluar campo_costo de una sola vez (cada celda es un punto que se manda a la funcion)
++MAX_CELDAS_CAMPO = 1500000
+ 
+ 
+ def _resultado(estado, ruta=None, longitud=0.0, cercanos=None, mensaje=""):
+@@ -373,23 +377,27 @@
+     return cfg
+ 
+ 
+-def calculo_ruta(inicio, fin, costo_ruta=None):
++def calculo_ruta(inicio, fin, costo_ruta=None, campo_costo=None):
+     """
+     inicio y fin: [x, y, z] o {"x":..,"y":..,"z":..} en mm.
+     costo_ruta: dict opcional con las opciones de _CONFIG_DEFECTO.
++    campo_costo: opcional. Funcion que recibe una LISTA de puntos [[x, y, z], ...] (mm) y regresa una lista
++                 de costos en [0, 1], uno por punto (por ejemplo la red C_NN). Se llama UNA vez con todas
++                 las celdas de la malla. El costo de entrar a una celda queda 1 + proximidad + lambda_campo * C,
++                 asi que sigue siendo >= 1 y la heuristica (distancia en linea recta) sigue siendo valida.
+ 
+     Regresa un dict con ruta, longitud_mm, estado ("ok", "sin_ruta" o "error"),
+     bloques_cercanos y mensaje. No lanza excepciones.
+     """
+     try:
+-        return _calculo_ruta(inicio, fin, costo_ruta)
++        return _calculo_ruta(inicio, fin, costo_ruta, campo_costo)
+     except ValueError as e:
+         return _resultado("error", mensaje=str(e))
+     except Exception as e:
+         return _resultado("error", mensaje="%s: %s" % (type(e).__name__, e))
+ 
+ 
+-def _calculo_ruta(inicio, fin, costo_ruta):
++def _calculo_ruta(inicio, fin, costo_ruta, campo_costo=None):
+     cfg = _leer_config(costo_ruta)
+     p0 = _a_xyz(inicio, "inicio")
+     p1 = _a_xyz(fin, "fin")
+@@ -444,6 +452,25 @@
+     inflado = radio + res / 2.0
+     peso = cfg["peso_proximidad"]
+     cache = {}
++
++    # campo de costo externo: se evalua una sola vez para toda la malla (un lote), no celda por celda
++    campo = None
++    lam = cfg["lambda_campo"]
++    if campo_costo is not None and lam > 0:
++        i0, i1, j0, j1, k0, k1 = limites
++        total = (i1 - i0 + 1) * (j1 - j0 + 1) * (k1 - k0 + 1)
++        if total > MAX_CELDAS_CAMPO:
++            raise ValueError(
++                "La malla tiene %d celdas, demasiadas para campo_costo (maximo %d). "
++                "Aumenta 'resolucion_mm'." % (total, MAX_CELDAS_CAMPO)
++            )
++        indices = [(i, j, k) for i in range(i0, i1 + 1) for j in range(j0, j1 + 1)
++                   for k in range(k0, k1 + 1)]
++        puntos_malla = [[p0[0] + i * res, p0[1] + j * res, p0[2] + k * res] for (i, j, k) in indices]
++        valores = campo_costo(puntos_malla)
++        if len(valores) != len(indices):
++            raise ValueError("campo_costo devolvio %d valores para %d puntos" % (len(valores), len(indices)))
++        campo = {c: min(1.0, max(0.0, float(v))) for c, v in zip(indices, valores)}
+ 
+     def evaluar(celda):
+         # regresa (bloqueada, multiplicador de costo)
+@@ -463,7 +490,8 @@
+                 if holgura < c["dseg"]:
+                     f = (c["dseg"] - max(holgura, 0.0)) / c["dseg"]
+                     pen += f * f
+-        r = (bloqueada, 1.0 + peso * pen)
++        extra = lam * campo.get(celda, 0.0) if campo is not None else 0.0
++        r = (bloqueada, 1.0 + peso * pen + extra)
+         cache[celda] = r
+         return r
+ 

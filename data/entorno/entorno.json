@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "bloques": [
+    {
+      "id": "motor_principal_1",
+      "nombre": "Motor principal",
+      "centro": {
+        "x": 1200.0,
+        "y": 0.0,
+        "z": 500.0
+      },
+      "size": {
+        "x": 600.0,
+        "y": 500.0,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "bateria_1",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 600.0,
+        "y": 300.0,
+        "z": 300.0
+      },
+      "size": {
+        "x": 300.0,
+        "y": 200.0,
+        "z": 200.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "chasis_viga_1",
+      "nombre": "Chasis viga",
+      "centro": {
+        "x": 1800.0,
+        "y": -250.0,
+        "z": 200.0
+      },
+      "size": {
+        "x": 800.0,
+        "y": 100.0,
+        "z": 100.0
+      },
+      "tipo": "neutro",
+      "valor": 0.0
+    },
+    {
+      "id": "tablero_1",
+      "nombre": "Tablero",
+      "centro": {
+        "x": 2000.0,
+        "y": 200.0,
+        "z": 600.0
+      },
+      "size": {
+        "x": 300.0,
+        "y": 400.0,
+        "z": 300.0
+      },
+      "tipo": "neutro",
+      "valor": 0.0
+    }
+  ]
+}
