@@ -150,6 +150,10 @@ def _resumen_de_reporte(reporte: dict) -> dict:
         "r_min_exigido_mm": rc.get("r_min_exigido_mm"),
         "mensaje": reporte.get("mensaje"),
     }
+    tr = reporte.get("transicion")
+    if tr:  # lo esencial de la transicion de seccion, para poder reconstruir que se aprobo y que salio
+        resumen["transicion"] = {k: tr[k] for k in ("ley", "area_inicio_mm2", "area_fin_mm2", "cambio_max_de_area_por_50mm",
+                                                     "area_ok", "aspecto_ok") if k in tr}
     return {k: v for k, v in resumen.items() if v is not None}
 
 
@@ -415,6 +419,8 @@ def generar_ducto(
     alto_mm: float,
     espesor_mm: float,
     generar_si_infactible: bool = False,
+    ancho_fin_mm: float | None = None,
+    alto_fin_mm: float | None = None,
 ) -> str:
     """Genera el ducto rectangular hueco (STEP y STL) entre dos puntos del entorno: calcula la ruta con el A*,
     la redondea con arcos que cumplen el radio minimo aprobado (r_min_mm) y revisa colisiones con los bloques.
@@ -428,13 +434,17 @@ def generar_ducto(
         alto_mm: alto de la seccion rectangular en mm. Debe darlo el usuario.
         espesor_mm: espesor de pared en mm. Debe darlo el usuario.
         generar_si_infactible: true SOLO si el usuario ya eligio generar el ducto aunque no cumpla R_min.
+        ancho_fin_mm: ancho de la seccion del puerto FINAL, solo si el usuario dio una seccion distinta ahi
+            (ancho_mm y alto_mm son entonces los del puerto inicial). Si no, omitelo.
+        alto_fin_mm: alto de la seccion del puerto final (va junto con ancho_fin_mm).
     """
     if ruteo_astar is None:
         return _FALTA_RUTEO
     if "r_min_mm" not in PARAMETROS:
         return "Todavia no hay parametros aprobados (r_min_mm). Primero registra los parametros con registrar_parametros."
     try:
-        propuesta = informe_ducto.propuesta_de_ducto(inicio, fin, ancho_mm, alto_mm, espesor_mm)
+        propuesta = informe_ducto.propuesta_de_ducto(inicio, fin, ancho_mm, alto_mm, espesor_mm,
+                                                     ancho_fin_mm, alto_fin_mm)
     except ValueError as e:
         return str(e)
 
@@ -444,12 +454,14 @@ def generar_ducto(
     if isinstance(final, str):
         return final
     p0, p1, ancho, alto, espesor = informe_ducto.argumentos_de_propuesta(final)
+    ancho_fin, alto_fin = informe_ducto.seccion_fin_de_propuesta(final)
 
     nombre = "ducto_" + uuid.uuid4().hex[:6]
     try:
         reporte = curva_ruta.ducto_desde_entorno(
             p0, p1, ancho, alto, espesor, parametros=dict(PARAMETROS),
             nombre=nombre, generar_si_infactible=generar_si_infactible,
+            ancho_fin_mm=ancho_fin, alto_fin_mm=alto_fin,
         )
     except ModuleNotFoundError as e:  # p. ej. falta cadquery
         aviso += _auditar_resultado(ficha, {"estado": "error", "nombre": nombre, "mensaje": f"falta una libreria: {e}"},

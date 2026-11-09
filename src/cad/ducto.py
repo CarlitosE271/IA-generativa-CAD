@@ -1,40 +1,14 @@
 """
-Generacion de CAD del ducto (componente 5 del diagrama de arquitectura): convierte la ruta que
-calcula el A* (una lista de puntos [x, y, z]) en un ducto rectangular HUECO y lo exporta a
+Convierte la ruta que calcula el A* (una lista de puntos [x, y, z]) en un ducto rectangular hueco y lo exporta a
 STEP/STL.
 
 Flujo:
-  ruta del A* (esquinas del grid)
-    -> suavizar_ruta        corta las esquinas (Chaikin) y remuestrea a paso uniforme
-    -> validar_*            compara contra los parametros aprobados (R_min, area, relacion de aspecto)
+  ruta del A* 
+    -> suavizar_ruta        corta las esquinas usndo Chaikin y remuestrea a paso uniforme
+    -> validar_*            compara contra los parametros aprobados
     -> estaciones           un rectangulo por estacion, orientado con transporte paralelo
-    -> loft (CadQuery)      sólido exterior, menos sólido interior = ducto hueco
+    -> loft                 sólido exterior, menos sólido interior = ducto hueco
     -> export               data/cad/<nombre>.step y .stl
-
-Por que NO se usa sweep() de CadQuery: barrer un rectangulo por una curva 3D puede torcer el perfil
-(el rectangulo gira sobre si mismo) o fallar. Aqui la orientacion de cada rectangulo se calcula
-a mano con "marcos de transporte paralelo" (rotation-minimizing frames): el perfil nunca gira
-innecesariamente. Despues se hace un loft entre los perfiles, que es justo el "loft entre perfiles
-por estacion" de tu diagrama (y deja listo el camino para que la seccion cambie a lo largo de la
-ruta mas adelante: rectangular -> circular).
-
-Casi todo es matematica pura con numpy (sin CadQuery, sin LLM), igual que documentos.py y
-geometria.py: por eso se puede probar sin CadQuery. Solo construir_ducto() y exportar() la usan.
-
-Suposiciones que conviene tener claras (para defenderlas ante el panel):
-  - r_min_mm se compara contra el radio de curvatura de la LINEA CENTRAL del ducto.
-  - El suavizado corta esquinas: la curva resultante puede acercarse a un obstaculo mas que la
-    ruta original del A*. Esta version NO revisa colisiones del ducto con el entorno.
-  - Si la ruta del A* gira 90 grados en una sola celda del grid, el radio resultante puede ser
-    chico y violar r_min_mm: no es un error de este modulo, es informacion util (el A* deberia
-    imponer R_min en su costo, como dice tu plan).
-  - El angulo de desmoldeo (draft angle) todavia no se valida: necesita definir una direccion de
-    desmoldeo, que es una decision de manufactura que no hemos tomado.
-
-Nota honesta: CadQuery no se pudo instalar en este entorno de trabajo, asi que construir_ducto()
-se probo con un modulo falso (tests/test_ducto.py). Toda la parte numerica (suavizado, radios,
-marcos, rectangulos) si se probo con numpy real. La primera corrida real con CadQuery es en tu
-maquina: es probable que el loft pida algun ajuste, avisame el error.
 """
 
 from __future__ import annotations
@@ -146,15 +120,24 @@ def diametro_hidraulico(ancho_mm: float, alto_mm: float) -> float:
     return 2.0 * ancho_mm * alto_mm / (ancho_mm + alto_mm)
 
 
-def validar_seccion(ancho_mm: float, alto_mm: float, parametros: dict) -> dict:
+def validar_seccion(ancho_mm: float, alto_mm: float, parametros: dict, espesor_mm: float | None = None) -> dict:
     """Area y relacion de aspecto de la seccion contra los parametros aprobados.
-    Si falta un parametro, ese chequeo se marca 'no_verificado' en lugar de aprobarse en silencio."""
+    Si falta un parametro, ese chequeo se marca 'no_verificado' en lugar de aprobarse en silencio.
+
+    ancho/alto son medidas EXTERIORES. Con espesor_mm, las comprobaciones (area, aspecto, D_h) se hacen sobre la seccion
+    INTERIOR (ancho - 2e, alto - 2e), que es por donde pasa el aire; sin espesor_mm se usan las exteriores (como antes).
+    Con espesor 2 mm en un ducto de 40 x 25, el area exterior es 1000 mm2 y la de paso 756 mm2: no es un detalle."""
+    if espesor_mm is not None:
+        ancho_mm, alto_mm = ancho_mm - 2.0 * espesor_mm, alto_mm - 2.0 * espesor_mm
+        if min(ancho_mm, alto_mm) <= 0:
+            raise ValueError("El espesor de pared deja una seccion interior sin espacio.")
     area = ancho_mm * alto_mm
     aspecto = max(ancho_mm, alto_mm) / min(ancho_mm, alto_mm)
     resultado: dict = {
         "area_mm2": round(area, 2),
         "relacion_aspecto": round(aspecto, 3),
         "diametro_hidraulico_mm": round(diametro_hidraulico(ancho_mm, alto_mm), 2),
+        "medida": "interior" if espesor_mm is not None else "exterior",
     }
     amin, amax = parametros.get("area_min_mm2"), parametros.get("area_max_mm2")
     if amin is None or amax is None:
@@ -164,6 +147,194 @@ def validar_seccion(ancho_mm: float, alto_mm: float, parametros: dict) -> dict:
     amax_aspecto = parametros.get("aspect_ratio_max")
     resultado["aspecto_ok"] = "no_verificado" if amax_aspecto is None else bool(aspecto <= amax_aspecto)
     return resultado
+
+
+# --------------------------------------------------------------------------
+# Transicion de seccion a lo largo de la ruta
+# --------------------------------------------------------------------------
+LEYES_TRANSICION = ("suave", "lineal")
+
+
+def fraccion_de_transicion(u, ley: str = "suave") -> np.ndarray:
+    """Fraccion del cambio de seccion (0 = puerto inicial, 1 = puerto final) para u en [0, 1] (distancia relativa)."""
+    u = np.clip(np.asarray(u, dtype=float), 0.0, 1.0)
+    if ley == "lineal":
+        return u
+    if ley == "suave":
+        return u * u * (3.0 - 2.0 * u)
+    raise ValueError(f"Ley de transicion desconocida: {ley!r}. Opciones: {', '.join(LEYES_TRANSICION)}.")
+
+
+def _secciones_validas(ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm) -> tuple[float, float, float, float]:
+    """Completa la seccion final (si no se da, es igual a la inicial) y exige todo > 0 y fin completo o ausente."""
+    if (ancho_fin_mm is None) != (alto_fin_mm is None):
+        raise ValueError("Para cambiar la seccion en el puerto final hay que dar ancho_fin_mm Y alto_fin_mm.")
+    a1 = float(ancho_mm if ancho_fin_mm is None else ancho_fin_mm)
+    h1 = float(alto_mm if alto_fin_mm is None else alto_fin_mm)
+    a0, h0 = float(ancho_mm), float(alto_mm)
+    if min(a0, h0, a1, h1) <= 0:
+        raise ValueError("Ancho y alto de las secciones deben ser positivos.")
+    return a0, h0, a1, h1
+
+
+def validar_secciones_control(secciones) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """[(pos, ancho, alto), ...] -> (pos, ancho, alto) como arreglos. Exige >= 2 secciones, pos estrictamente creciente
+    empezando en 0 y terminando en 1, y anchos y altos positivos."""
+    try:
+        m = np.asarray([[float(c) for c in fila] for fila in secciones], dtype=float)
+    except (TypeError, ValueError):
+        raise ValueError("secciones debe ser una lista de (pos, ancho_mm, alto_mm).") from None
+    if m.ndim != 2 or m.shape[1] != 3 or len(m) < 2:
+        raise ValueError("secciones necesita al menos 2 secciones, cada una (pos, ancho_mm, alto_mm).")
+    if not np.all(np.isfinite(m)):
+        raise ValueError("secciones tiene valores no numericos (nan o infinito).")
+    pos, ancho, alto = m[:, 0], m[:, 1], m[:, 2]
+    if abs(pos[0]) > 1e-9 or abs(pos[-1] - 1.0) > 1e-9:
+        raise ValueError("La primera seccion debe estar en pos=0 (puerto inicial) y la ultima en pos=1 (puerto final).")
+    if np.any(np.diff(pos) <= 0):
+        raise ValueError("Las posiciones de las secciones deben crecer estrictamente.")
+    if ancho.min() <= 0 or alto.min() <= 0:
+        raise ValueError("Ancho y alto de las secciones deben ser positivos.")
+    return pos, ancho, alto
+
+
+def _pendientes_pchip(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Pendientes de Fritsch-Carlson (como PCHIP de scipy): 0 en los extremos locales, media armonica ponderada en el
+    resto, y formula de tres puntos que conserva la forma en los extremos."""
+    h = np.diff(x)
+    delta = np.diff(y) / h
+    d = np.zeros(len(x))
+    if len(x) == 2:
+        d[:] = delta[0]
+        return d
+    for k in range(1, len(x) - 1):
+        if delta[k - 1] * delta[k] > 0.0:
+            w1, w2 = 2.0 * h[k] + h[k - 1], h[k] + 2.0 * h[k - 1]
+            d[k] = (w1 + w2) / (w1 / delta[k - 1] + w2 / delta[k])
+
+    def extremo(h0, h1, d0, d1):
+        v = ((2.0 * h0 + h1) * d0 - h0 * d1) / (h0 + h1)
+        if np.sign(v) != np.sign(d0):
+            return 0.0
+        if np.sign(d0) != np.sign(d1) and abs(v) > 3.0 * abs(d0):
+            return 3.0 * d0
+        return v
+
+    d[0] = extremo(h[0], h[1], delta[0], delta[1])
+    d[-1] = extremo(h[-1], h[-2], delta[-1], delta[-2])
+    return d
+
+
+def interpolar_pchip(x, y, u) -> np.ndarray:
+    """Valor en u de la cubica monotona (PCHIP) que pasa por los nodos (x, y). Solo numpy."""
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    u = np.clip(np.asarray(u, dtype=float), x[0], x[-1])
+    d = _pendientes_pchip(x, y)
+    i = np.clip(np.searchsorted(x, u, side="right") - 1, 0, len(x) - 2)
+    h = x[i + 1] - x[i]
+    t = (u - x[i]) / h
+    t2, t3 = t * t, t * t * t
+    return ((2 * t3 - 3 * t2 + 1) * y[i] + (t3 - 2 * t2 + t) * h * d[i]
+            + (-2 * t3 + 3 * t2) * y[i + 1] + (t3 - t2) * h * d[i + 1])
+
+
+def validar_rectos(rectos_mm) -> tuple[float, float]:
+    """None -> (0, 0). Si no: dos longitudes >= 0 (mm) de los tramos rectos de entrada y salida."""
+    if rectos_mm is None:
+        return 0.0, 0.0
+    try:
+        l0, l1 = (float(v) for v in rectos_mm)
+    except (TypeError, ValueError):
+        raise ValueError("rectos_mm debe ser (tramo_inicial_mm, tramo_final_mm).") from None
+    if not (math.isfinite(l0) and math.isfinite(l1)) or l0 < 0 or l1 < 0:
+        raise ValueError("Los tramos rectos deben ser numeros >= 0.")
+    return l0, l1
+
+
+def perfil_de_seccion(puntos: np.ndarray, ancho_mm=None, alto_mm=None, ancho_fin_mm=None, alto_fin_mm=None,
+                      ley: str = "suave", secciones=None, rectos_mm=None) -> tuple[np.ndarray, np.ndarray]:
+    """(anchos, altos) de la seccion en cada punto de la linea central, segun la distancia recorrida.
+    Modo clasico: ancho/alto (+ fin opcional) con la ley 'suave' o 'lineal'.
+    Modo por estaciones: secciones=[(pos, ancho, alto), ...] (ancho/alto/fin deben ser None); ley 'suave' = PCHIP,
+    'lineal' = tramos rectos.
+    rectos_mm=(l0, l1): la seccion es constante en los primeros l0 mm y los ultimos l1 mm, y el cambio (u de 0 a 1)
+    ocurre solo entre ellos."""
+    if ley not in LEYES_TRANSICION:
+        raise ValueError(f"Ley de transicion desconocida: {ley!r}. Opciones: {', '.join(LEYES_TRANSICION)}.")
+    l0, l1 = validar_rectos(rectos_mm)
+    tramos = np.linalg.norm(np.diff(puntos, axis=0), axis=1)
+    s = np.concatenate(([0.0], np.cumsum(tramos)))
+    if l0 + l1 > 0.0:
+        util = s[-1] - l0 - l1
+        if util <= 1e-6:
+            raise ValueError(f"Los tramos rectos ({l0:g} + {l1:g} mm) ocupan todo el ducto ({s[-1]:.0f} mm).")
+        u = np.clip((s - l0) / util, 0.0, 1.0)
+    else:
+        u = s / s[-1] if s[-1] > 0 else np.zeros_like(s)
+    if secciones is not None:
+        if any(v is not None for v in (ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm)):
+            raise ValueError("Da las secciones POR ESTACIONES (secciones=...) o ancho/alto (+ fin), no las dos cosas.")
+        pos, ancho, alto = validar_secciones_control(secciones)
+        if ley == "lineal":
+            return np.interp(u, pos, ancho), np.interp(u, pos, alto)
+        return interpolar_pchip(pos, ancho, u), interpolar_pchip(pos, alto, u)
+    if ancho_mm is None or alto_mm is None:
+        raise ValueError("Falta ancho_mm y alto_mm (o secciones=...).")
+    a0, h0, a1, h1 = _secciones_validas(ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm)
+    f = fraccion_de_transicion(u, ley)
+    return a0 + (a1 - a0) * f, h0 + (h1 - h0) * f
+
+
+def cambio_max_relativo_por(valores: np.ndarray, s: np.ndarray, distancia_mm: float = 50.0) -> float:
+    """Mayor |V(s + d) - V(s)| / V(s) en la curva (misma definicion que la ficha de los ductos de referencia)."""
+    if len(valores) < 2 or s[-1] <= 0.0:
+        return 0.0
+    destino = np.interp(s + distancia_mm, s, valores)
+    sirve = s + distancia_mm <= s[-1] + 1e-9
+    if not sirve.any():  # ducto mas corto que la ventana: se compara extremo contra extremo
+        return float(abs(valores[-1] - valores[0]) / max(valores[0], 1e-12))
+    return float(np.max(np.abs(destino[sirve] - valores[sirve]) / np.maximum(valores[sirve], 1e-12)))
+
+
+def validar_transicion(puntos: np.ndarray, ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm,
+                       ley: str, parametros: dict, espesor_mm: float | None = None, secciones=None,
+                       rectos_mm=None) -> dict:
+    """Area, relacion de aspecto y cambio de area a lo largo del ducto, con las medidas NOMINALES que se piden.
+    Con espesor_mm se usa la seccion interior (la de paso del aire), igual que validar_seccion.
+    Con secciones=[(pos, ancho, alto), ...] el perfil es por estaciones (ancho/alto/fin deben ser None).
+    Lo que falte en parametros se marca 'no_verificado'."""
+    anchos, altos = perfil_de_seccion(puntos, ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm, ley, secciones, rectos_mm)
+    if espesor_mm is not None:
+        anchos, altos = anchos - 2.0 * espesor_mm, altos - 2.0 * espesor_mm
+        if min(anchos.min(), altos.min()) <= 0:
+            raise ValueError("El espesor de pared deja una seccion interior sin espacio.")
+    tramos = np.linalg.norm(np.diff(puntos, axis=0), axis=1)
+    s = np.concatenate(([0.0], np.cumsum(tramos)))
+    area = anchos * altos
+    aspecto = np.maximum(anchos, altos) / np.minimum(anchos, altos)
+    dh = 2.0 * anchos * altos / (anchos + altos)
+    # semiangulo equivalente de un difusor/contraccion conica: tan(theta) = (dDh/ds) / 2
+    ddh = np.gradient(dh, s) if len(s) > 1 and s[-1] > 0 else np.zeros_like(dh)
+    ang = np.degrees(np.arctan(ddh / 2.0))
+    r = {
+        "ley": ley, "medida": "interior" if espesor_mm is not None else "exterior",
+        "area_inicio_mm2": round(float(area[0]), 1), "area_fin_mm2": round(float(area[-1]), 1),
+        "area_min_mm2": round(float(area.min()), 1), "area_max_mm2": round(float(area.max()), 1),
+        "relacion_aspecto_max": round(float(aspecto.max()), 3),
+        "cambio_max_de_area_por_50mm": round(cambio_max_relativo_por(area, s, 50.0), 3),
+        "semiangulo_difusor_max_grados": round(float(max(ang.max(), 0.0)), 2),
+        "semiangulo_contraccion_max_grados": round(float(max(-ang.min(), 0.0)), 2),
+    }
+    if rectos_mm is not None and any(validar_rectos(rectos_mm)):
+        r["tramos_rectos_mm"] = list(validar_rectos(rectos_mm))
+    if secciones is not None:
+        r["n_secciones"] = len(secciones)
+        r["interpolacion"] = "lineal" if ley == "lineal" else "pchip"
+    amin, amax = parametros.get("area_min_mm2"), parametros.get("area_max_mm2")
+    r["area_ok"] = "no_verificado" if amin is None or amax is None else bool(amin <= area.min() and area.max() <= amax)
+    amax_asp = parametros.get("aspect_ratio_max")
+    r["aspecto_ok"] = "no_verificado" if amax_asp is None else bool(aspecto.max() <= amax_asp)
+    return r
 
 
 # --------------------------------------------------------------------------
@@ -226,16 +397,22 @@ def estaciones_rectangulares(puntos, t, n, b, ancho_mm, alto_mm, extension_mm: f
         centros = [puntos[0] - t[0] * extension_mm] + centros + [puntos[-1] + t[-1] * extension_mm]
         tt, nn, bb = [t[0]] + tt + [t[-1]], [n[0]] + nn + [n[-1]], [b[0]] + bb + [b[-1]]
 
-    mw, mh = ancho_mm / 2.0, alto_mm / 2.0
+    # ancho/alto pueden ser un numero (seccion constante) o un arreglo con un valor por punto de 'puntos'
+    # (transicion de seccion); las estaciones de extension repiten el valor del extremo.
+    anchos = np.broadcast_to(np.asarray(ancho_mm, dtype=float), (len(puntos),)).copy()
+    altos = np.broadcast_to(np.asarray(alto_mm, dtype=float), (len(puntos),)).copy()
+    if extension_mm > 0:
+        anchos = np.concatenate(([anchos[0]], anchos, [anchos[-1]]))
+        altos = np.concatenate(([altos[0]], altos, [altos[-1]]))
     rectangulos = []
-    for c, ni, bi in zip(centros, nn, bb):
+    for c, ni, bi, w, h in zip(centros, nn, bb, anchos / 2.0, altos / 2.0):
         rectangulos.append(
             np.array(
                 [
-                    c + mw * bi + mh * ni,
-                    c - mw * bi + mh * ni,
-                    c - mw * bi - mh * ni,
-                    c + mw * bi - mh * ni,
+                    c + w * bi + h * ni,
+                    c - w * bi + h * ni,
+                    c - w * bi - h * ni,
+                    c + w * bi - h * ni,
                 ]
             )
         )
@@ -261,14 +438,23 @@ def _nombre_valido(nombre: str) -> str:
     return nombre
 
 
-def construir_ducto(puntos, ancho_mm, alto_mm, espesor_mm, max_estaciones: int = 40):
-    """Devuelve el solido CadQuery del ducto hueco (extremos abiertos)."""
+def construir_ducto(puntos, ancho_mm, alto_mm, espesor_mm, max_estaciones: int = 40,
+                    ancho_fin_mm=None, alto_fin_mm=None, ley_transicion: str = "suave", secciones=None,
+                    rectos_mm=None):
+    """Devuelve el solido CadQuery del ducto hueco (extremos abiertos).
+    ancho/alto = seccion del puerto inicial; ancho_fin_mm/alto_fin_mm (opcionales, juntos) = seccion del puerto
+    final: la seccion cambia a lo largo de la ruta segun ley_transicion ('suave' o 'lineal').
+    secciones=[(pos, ancho, alto), ...] (con ancho/alto/fin = None): perfil por estaciones (ver docstring del modulo).
+    rectos_mm=(l0, l1): tramos rectos de los puertos donde la seccion no cambia."""
     import cadquery as cq  # import perezoso: es pesada y solo se usa aqui
 
-    if espesor_mm <= 0 or espesor_mm >= min(ancho_mm, alto_mm) / 2.0:
-        raise ValueError("El espesor de pared debe ser positivo y menor que la mitad de la dimension mas chica.")
-
     puntos = _submuestrear(np.asarray(puntos, dtype=float), max_estaciones)
+    anchos, altos = perfil_de_seccion(puntos, ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm, ley_transicion, secciones,
+                                      rectos_mm)
+    if espesor_mm <= 0 or espesor_mm >= min(anchos.min(), altos.min()) / 2.0:
+        raise ValueError("El espesor de pared debe ser positivo y menor que la mitad de la dimension mas chica "
+                         "(en cualquier punto del ducto).")
+
     t, n, b = marcos_transporte_paralelo(puntos)
 
     def hacer_loft(rectangulos):
@@ -279,15 +465,58 @@ def construir_ducto(puntos, ancho_mm, alto_mm, espesor_mm, max_estaciones: int =
             alambres.append(cq.Wire.makePolygon(vectores))
         return cq.Solid.makeLoft(alambres, False)
 
-    exterior = hacer_loft(estaciones_rectangulares(puntos, t, n, b, ancho_mm, alto_mm))
+    exterior = hacer_loft(estaciones_rectangulares(puntos, t, n, b, anchos, altos))
     interior = hacer_loft(
         estaciones_rectangulares(
             puntos, t, n, b,
-            ancho_mm - 2 * espesor_mm, alto_mm - 2 * espesor_mm,
+            anchos - 2 * espesor_mm, altos - 2 * espesor_mm,
             extension_mm=espesor_mm + 1.0,
         )
     )
     return exterior.cut(interior)
+
+
+def malla_numpy(puntos, ancho_mm, alto_mm, espesor_mm, max_estaciones: int = 40,
+                ancho_fin_mm=None, alto_fin_mm=None, ley_transicion: str = "suave", secciones=None,
+                rectos_mm=None) -> np.ndarray:
+    """Malla de triangulos (n, 3, 3) CERRADA del mismo ducto hueco, hecha solo con numpy y con las MISMAS estaciones que
+    usa construir_ducto (marcos, perfil de seccion, espesor). No sustituye al CAD (no es STEP); sirve para
+    (1) medir con la ficha tecnica un ducto sin necesitar CadQuery y (2) comprobar de forma independiente que
+    las estaciones estan bien: si la malla sale torcida o con la seccion equivocada, el loft de CadQuery tambien."""
+    puntos = _submuestrear(np.asarray(puntos, dtype=float), max_estaciones)
+    anchos, altos = perfil_de_seccion(puntos, ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm, ley_transicion, secciones,
+                                      rectos_mm)
+    if espesor_mm <= 0 or espesor_mm >= min(anchos.min(), altos.min()) / 2.0:
+        raise ValueError("El espesor de pared debe ser positivo y menor que la mitad de la dimension mas chica "
+                         "(en cualquier punto del ducto).")
+    t, n, b = marcos_transporte_paralelo(puntos)
+    ext = np.array(estaciones_rectangulares(puntos, t, n, b, anchos, altos))                          # (k, 4, 3)
+    interior = np.array(estaciones_rectangulares(puntos, t, n, b, anchos - 2 * espesor_mm, altos - 2 * espesor_mm))
+    k = len(puntos)
+    tri = []
+    for anillos, hacia_afuera in ((ext, True), (interior, False)):
+        for i in range(k - 1):
+            for j in range(4):
+                jj = (j + 1) % 4
+                a_, b_, c_, d_ = anillos[i][j], anillos[i][jj], anillos[i + 1][jj], anillos[i + 1][j]
+                for tr in ((a_, b_, c_), (a_, c_, d_)):
+                    tr = np.array(tr)
+                    normal = np.cross(tr[1] - tr[0], tr[2] - tr[0])
+                    radial = tr.mean(axis=0) - puntos[i]
+                    radial -= np.dot(radial, t[i]) * t[i]               # solo la parte perpendicular al eje
+                    # exterior: normal hacia afuera del eje; interior: hacia el eje (el material queda entre las dos)
+                    if (np.dot(normal, radial) < 0) == hacia_afuera:
+                        tr = tr[[0, 2, 1]]
+                    tri.append(tr)
+    for i, signo in ((0, -1.0), (k - 1, 1.0)):                          # tapas anulares en los extremos
+        for j in range(4):
+            jj = (j + 1) % 4
+            for tr in ((ext[i][j], ext[i][jj], interior[i][jj]), (ext[i][j], interior[i][jj], interior[i][j])):
+                tr = np.array(tr)
+                if np.dot(np.cross(tr[1] - tr[0], tr[2] - tr[0]), signo * t[i]) < 0:
+                    tr = tr[[0, 2, 1]]
+                tri.append(tr)
+    return np.array(tri)
 
 
 def exportar(shape, nombre: str) -> dict:
@@ -317,9 +546,24 @@ def generar_ducto(
     mm_por_celda: float = 1.0,
     exportar_archivos: bool = True,
     curva=None,
+    ancho_fin_mm: float | None = None,
+    alto_fin_mm: float | None = None,
+    ley_transicion: str = "suave",
+    secciones=None,
+    rectos_mm=None,
 ) -> dict:
     """Ruta del A* -> ducto rectangular hueco en data/cad/ + reporte de validacion (dict simple, listo
     para mostrarse o para que el LLM lo narre).
+
+    secciones:    [(pos, ancho_mm, alto_mm), ...] perfil por estaciones (pos 0 = puerto inicial, 1 = final). Si se da,
+                  ancho_mm/alto_mm/ancho_fin_mm/alto_fin_mm deben ser None; 'seccion' y 'seccion_fin' del reporte son
+                  la primera y la ultima, y 'transicion' lleva n_secciones e interpolacion.
+
+    ancho_mm/alto_mm: seccion del puerto inicial. ancho_fin_mm/alto_fin_mm (opcionales, los dos juntos): seccion
+                  del puerto final; si se dan, la seccion cambia a lo largo de la ruta (ley_transicion 'suave' o
+                  'lineal') y el reporte agrega 'seccion_fin' y 'transicion'. Sin ellos, todo igual que antes.
+
+    rectos_mm:    (l0, l1) mm de tramo recto en cada puerto; la seccion no cambia ahi (ver docstring del modulo).
 
     ruta:         lista de [x, y, z]. Si el A* devuelve indices de celda, pasa mm_por_celda para escalar.
     parametros:   dict como PARAMETROS de agente.py (r_min_mm, area_min_mm2, area_max_mm2, aspect_ratio_max).
@@ -329,10 +573,23 @@ def generar_ducto(
     Siempre genera el ducto, aun si no cumple r_min: decide el humano, y el reporte dice por que."""
     parametros = parametros or {}
     nombre = _nombre_valido(nombre)
+    if ley_transicion not in LEYES_TRANSICION:
+        raise ValueError(f"Ley de transicion desconocida: {ley_transicion!r}. Opciones: {', '.join(LEYES_TRANSICION)}.")
+    if secciones is not None:
+        if any(v is not None for v in (ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm)):
+            raise ValueError("Da las secciones POR ESTACIONES (secciones=...) o ancho/alto (+ fin), no las dos cosas.")
+        _, anchos_c, altos_c = validar_secciones_control(secciones)
+        a0, h0, a1, h1 = float(anchos_c[0]), float(altos_c[0]), float(anchos_c[-1]), float(altos_c[-1])
+        hay_transicion = bool(np.any(anchos_c != a0) or np.any(altos_c != h0))
+        menor = float(min(anchos_c.min(), altos_c.min()))
+    else:
+        a0, h0, a1, h1 = _secciones_validas(ancho_mm, alto_mm, ancho_fin_mm, alto_fin_mm)
+        hay_transicion = (a0, h0) != (a1, h1)
+        menor = min(a0, h0, a1, h1)
 
     if curva is None:
         escalada = _como_puntos(ruta) * mm_por_celda
-        paso = max(1.0, min(ancho_mm, alto_mm) / 4.0)  # fino, para medir bien la curvatura
+        paso = max(1.0, menor / 4.0)  # fino, para medir bien la curvatura
         curva = suavizar_ruta(escalada, paso_mm=paso)
     else:
         curva = _como_puntos(curva)
@@ -345,17 +602,26 @@ def generar_ducto(
         radio = validar_radio_minimo(curva, float(r_min))
         radio["r_min_exigido_mm"] = float(r_min)
 
-    shape = construir_ducto(curva, ancho_mm, alto_mm, espesor_mm)
+    shape = construir_ducto(curva, ancho_mm, alto_mm, espesor_mm, ancho_fin_mm=ancho_fin_mm, alto_fin_mm=alto_fin_mm,
+                            ley_transicion=ley_transicion, secciones=secciones, rectos_mm=rectos_mm)
 
     reporte = {
         "nombre": nombre,
         "longitud_mm": round(longitud_mm(curva), 1),
-        "seccion": validar_seccion(ancho_mm, alto_mm, parametros),
+        "seccion": validar_seccion(a0, h0, parametros, espesor_mm),
         "radio_curvatura": radio,
         "espesor_mm": float(espesor_mm),
         "volumen_mm3": round(float(shape.Volume()), 1),
         "solido_valido": bool(shape.isValid()),
     }
+    if hay_transicion:
+        reporte["seccion_fin"] = validar_seccion(a1, h1, parametros, espesor_mm)
+        if secciones is not None:
+            reporte["transicion"] = validar_transicion(curva, None, None, None, None, ley_transicion, parametros,
+                                                       espesor_mm, secciones=secciones, rectos_mm=rectos_mm)
+        else:
+            reporte["transicion"] = validar_transicion(curva, a0, h0, a1, h1, ley_transicion, parametros, espesor_mm,
+                                                       rectos_mm=rectos_mm)
     if exportar_archivos:
         reporte["archivos"] = exportar(shape, nombre)
     return reporte

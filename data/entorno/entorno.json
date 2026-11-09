@@ -2,55 +2,391 @@
   "version": 1,
   "bloques": [
     {
-      "id": "motor_principal_1",
-      "nombre": "Motor principal",
+      "id": "motor_001",
+      "nombre": "Motor",
       "centro": {
-        "x": 1200.0,
-        "y": 0.0,
+        "x": 1051.5625,
+        "y": -5.625,
         "z": 500.0
       },
       "size": {
-        "x": 600.0,
-        "y": 500.0,
+        "x": 23.125,
+        "y": 231.25,
         "z": 500.0
       },
       "tipo": "termico",
       "valor": 100.0
     },
     {
-      "id": "bateria_1",
-      "nombre": "Bateria",
+      "id": "motor_002",
+      "nombre": "Motor",
       "centro": {
-        "x": 600.0,
-        "y": 300.0,
-        "z": 300.0
+        "x": 1074.6875,
+        "y": 5.9375,
+        "z": 500.0
       },
       "size": {
-        "x": 300.0,
-        "y": 200.0,
-        "z": 200.0
+        "x": 23.125,
+        "y": 300.625,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_003",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1097.8125,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 370.0,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_004",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1120.9375,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 416.25,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_005",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1144.0625,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 439.375,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_006",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1467.8125,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 439.375,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_007",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1167.1875,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 462.5,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_008",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1444.6875,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 462.5,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_009",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1201.875,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 46.25,
+        "y": 508.75,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_010",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1398.4375,
+        "y": -5.625,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 508.75,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_011",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1305.9375,
+        "y": 0.0,
+        "z": 500.0
+      },
+      "size": {
+        "x": 161.875,
+        "y": 520.0,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_012",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1421.5625,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 485.625,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_013",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1490.9375,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 393.125,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_014",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1514.0625,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 346.875,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_015",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1537.1875,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 254.375,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "motor_016",
+      "nombre": "Motor",
+      "centro": {
+        "x": 1554.375,
+        "y": 5.9375,
+        "z": 500.0
+      },
+      "size": {
+        "x": 11.25,
+        "y": 161.875,
+        "z": 500.0
+      },
+      "tipo": "termico",
+      "valor": 100.0
+    },
+    {
+      "id": "bateria_001",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 501.5625,
+        "y": 305.625,
+        "z": 275.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 138.75,
+        "z": 250.0
       },
       "tipo": "electrico",
       "valor": 60.0
     },
     {
-      "id": "chasis_viga_1",
-      "nombre": "Chasis viga",
+      "id": "bateria_002",
+      "nombre": "Bateria",
       "centro": {
-        "x": 1800.0,
-        "y": -250.0,
-        "z": 200.0
+        "x": 524.6875,
+        "y": 305.625,
+        "z": 275.0
       },
       "size": {
-        "x": 800.0,
-        "y": 100.0,
-        "z": 100.0
+        "x": 23.125,
+        "y": 185.0,
+        "z": 250.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "bateria_003",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 686.5625,
+        "y": 305.625,
+        "z": 275.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 185.0,
+        "z": 250.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "bateria_004",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 594.0625,
+        "y": 300.0,
+        "z": 275.0
+      },
+      "size": {
+        "x": 115.625,
+        "y": 220.0,
+        "z": 250.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "bateria_005",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 663.4375,
+        "y": 294.0625,
+        "z": 275.0
+      },
+      "size": {
+        "x": 23.125,
+        "y": 208.125,
+        "z": 250.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "bateria_006",
+      "nombre": "Bateria",
+      "centro": {
+        "x": 704.0625,
+        "y": 294.0625,
+        "z": 275.0
+      },
+      "size": {
+        "x": 11.875,
+        "y": 115.625,
+        "z": 250.0
+      },
+      "tipo": "electrico",
+      "valor": 60.0
+    },
+    {
+      "id": "soporte_001",
+      "nombre": "Soporte",
+      "centro": {
+        "x": 357.8125,
+        "y": -150.0,
+        "z": 150.0
+      },
+      "size": {
+        "x": 115.625,
+        "y": 500.0,
+        "z": 300.0
       },
       "tipo": "neutro",
       "valor": 0.0
     },
     {
-      "id": "tablero_1",
+      "id": "soporte_002",
+      "nombre": "Soporte",
+      "centro": {
+        "x": 657.8125,
+        "y": -342.1875,
+        "z": 150.0
+      },
+      "size": {
+        "x": 484.375,
+        "y": 115.625,
+        "z": 300.0
+      },
+      "tipo": "neutro",
+      "valor": 0.0
+    },
+    {
+      "id": "tablero_001",
       "nombre": "Tablero",
       "centro": {
         "x": 2000.0,

@@ -26,6 +26,18 @@ def test_propuesta_y_argumentos_son_inversas():
     assert ic.argumentos_de_propuesta(p) == ([0.0, 0.0, 500.0], [2300.0, 0.0, 500.0], 40.0, 25.0, 2.0)
 
 
+def test_propuesta_con_seccion_final_agrega_dos_campos_y_sin_ella_queda_igual():
+    sin = ic.propuesta_de_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2)
+    assert "ancho_fin_mm" not in sin and ic.seccion_fin_de_propuesta(sin) == (None, None)
+    con = ic.propuesta_de_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2, 80, 30)
+    assert con["ancho_fin_mm"] == 80.0 and con["alto_fin_mm"] == 30.0 and all(isinstance(v, float) for v in con.values())
+    assert ic.seccion_fin_de_propuesta(con) == (80.0, 30.0)
+    # argumentos_de_propuesta sigue devolviendo la misma tupla de 5 (compatibilidad)
+    assert ic.argumentos_de_propuesta(con) == ([0.0, 0.0, 500.0], [2300.0, 0.0, 500.0], 40.0, 25.0, 2.0)
+    with pytest.raises(ValueError):
+        ic.propuesta_de_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2, ancho_fin_mm=80)  # falta el alto
+
+
 @pytest.mark.parametrize("malo", [[1, 2], [1, 2, 3, 4], "abc", None, [1, "x", 3]])
 def test_punto_3d_rechaza_lo_que_no_son_tres_numeros(malo):
     with pytest.raises(ValueError):
@@ -148,3 +160,16 @@ def test_traza_herramientas_lista_llamadas_y_resultados_sin_marcas():
 def test_traza_corta_los_resultados_muy_largos():
     m = types.SimpleNamespace(type="tool", name="x", content="a" * 5000)
     assert len(ic.traza_herramientas([m], max_caracteres=100)[0]["texto"]) < 120
+
+
+def test_texto_reporte_con_transicion_la_cuenta_con_sus_numeros():
+    r = _reporte_ok()
+    r["seccion_fin"] = {"area_mm2": 5000.0, "relacion_aspecto": 2.0, "diametro_hidraulico_mm": 71.4}
+    r["transicion"] = {"ley": "suave", "area_inicio_mm2": 1000.0, "area_fin_mm2": 5000.0, "area_min_mm2": 1000.0,
+                       "area_max_mm2": 5000.0, "relacion_aspecto_max": 2.0, "area_ok": True, "aspecto_ok": True,
+                       "cambio_max_de_area_por_50mm": 0.259, "semiangulo_difusor_max_grados": 3.21,
+                       "semiangulo_contraccion_max_grados": 0.0}
+    t = ic.texto_reporte(r)
+    assert "TRANSICION DE SECCION (suave)" in t and "25.9 %" in t and "3.21 grados" in t
+    assert "(puerto inicial)" in t
+    assert "TRANSICION" not in ic.texto_reporte(_reporte_ok())  # sin transicion, el texto es el de siempre

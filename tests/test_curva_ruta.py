@@ -235,6 +235,37 @@ def test_ducto_desde_entorno_pasa_el_radio_de_la_envolvente_al_astar_y_la_curva_
     assert d.radios_de_curvatura(capturado["curva"]).min() >= 45.0
 
 
+def test_ducto_desde_entorno_con_seccion_final_usa_la_mayor_para_esquivar_y_la_pasa_al_cad(monkeypatch):
+    ruteo = _instalar_ruteo_falso(monkeypatch)
+    capturado = {}
+    monkeypatch.setattr(cr, "generar_ducto", lambda ruta, a, h, e, **kw: capturado.update(kw) or {"nombre": "x"})
+
+    cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], 40.0, 30.0, 2.0, parametros={"r_min_mm": 45.0},
+                           ancho_fin_mm=100.0, alto_fin_mm=60.0, ley_transicion="lineal")
+
+    assert ruteo.llamadas[0]["radio_ducto_mm"] == pytest.approx(math.hypot(100, 60) / 2)  # la seccion MAYOR
+    assert capturado["ancho_fin_mm"] == 100.0 and capturado["alto_fin_mm"] == 60.0 and capturado["ley_transicion"] == "lineal"
+    with pytest.raises(ValueError):
+        cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], 40.0, 30.0, 2.0, ancho_fin_mm=100.0)
+
+
+def test_ducto_desde_entorno_con_estaciones_usa_la_mayor_de_todas_y_las_pasa_al_cad(monkeypatch):
+    ruteo = _instalar_ruteo_falso(monkeypatch)
+    capturado = {}
+    monkeypatch.setattr(cr, "generar_ducto", lambda ruta, a, h, e, **kw: capturado.update(kw, ancho=a, alto=h) or {"nombre": "x"})
+    secciones = [(0.0, 100.0, 60.0), (0.5, 160.0, 30.0), (1.0, 120.0, 70.0)]    # la del centro es la mas ancha
+
+    cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], None, None, 2.0, parametros={"r_min_mm": 45.0},
+                           secciones=secciones)
+
+    assert ruteo.llamadas[0]["radio_ducto_mm"] == pytest.approx(math.hypot(160, 30) / 2)
+    assert capturado["secciones"] == secciones and capturado["ancho"] is None and capturado["alto"] is None
+    with pytest.raises(ValueError):   # estaciones Y ancho/alto: ambiguo
+        cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], 40.0, 30.0, 2.0, secciones=secciones)
+    with pytest.raises(ValueError):   # estaciones mal formadas
+        cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], None, None, 2.0, secciones=[(0.0, 100.0, 60.0)])
+
+
 def test_ducto_desde_entorno_sin_r_min_avisa_y_no_manda_curva(monkeypatch):
     _instalar_ruteo_falso(monkeypatch)
     capturado = {}
@@ -303,3 +334,103 @@ def test_ducto_desde_entorno_pasa_campo_costo_solo_si_se_da_uno(monkeypatch):
     cr.ducto_desde_entorno([0, 0, 0], [300, 100, 0], 40.0, 30.0, 2.0, parametros={"r_min_mm": 45.0}, campo_costo=campo)
 
     assert vistos[0] == {} and vistos[1] == {"campo_costo": campo}
+
+
+# ---- tramos rectos en los puertos ----------------------------------------------------------------------------------
+def test_tramos_de_puertos_llevan_cada_extremo_hacia_adentro_por_la_normal():
+    t = cr.tramos_de_puertos([0, 0, 0], [500, 200, 0],
+                             {"inicio": {"normal": [-1, 0, 0], "tramo_mm": 100.0},
+                              "fin": {"normal": [0, 2, 0], "tramo_mm": 80.0, "seccion_constante_mm": 50.0}})
+    assert np.allclose(t["inicio_astar"], [100.0, 0.0, 0.0])          # la normal apunta hacia afuera: el ducto entra al reves
+    assert np.allclose(t["fin_astar"], [500.0, 120.0, 0.0])           # normal no unitaria: se normaliza
+    assert t["rectos_mm"] == (100.0, 50.0)                            # mm de SECCION constante, no de tramo recto
+    sin = cr.tramos_de_puertos([0, 0, 0], [500, 0, 0], None)
+    assert sin["inicio_astar"] == [0.0, 0.0, 0.0] and sin["rectos_mm"] == (0.0, 0.0)
+    solo_uno = cr.tramos_de_puertos([0, 0, 0], [500, 0, 0], {"fin": {"normal": [1, 0, 0], "tramo_mm": 60.0}})
+    assert solo_uno["inicio_astar"] == [0.0, 0.0, 0.0] and np.allclose(solo_uno["fin_astar"], [440.0, 0.0, 0.0])
+
+
+def test_tramos_de_puertos_rechaza_datos_invalidos():
+    for malo in ({"inicio": {"normal": [0, 0, 0], "tramo_mm": 50.0}},          # normal nula
+                 {"inicio": {"tramo_mm": 50.0}},                                # sin normal
+                 {"inicio": {"normal": [1, 0, 0], "tramo_mm": -5.0}},
+                 {"inicio": {"normal": [1, 0, 0], "tramo_mm": float("nan")}},
+                 {"inicio": {"normal": [1, 0], "tramo_mm": 50.0}},
+                 {"inicio": {"normal": [1, 0, 0], "tramo_mm": 50.0, "seccion_constante_mm": -1}}):
+        with pytest.raises(ValueError):
+            cr.tramos_de_puertos([0, 0, 0], [500, 0, 0], malo)
+    with pytest.raises(ValueError):   # los dos tramos terminan en el mismo punto
+        cr.tramos_de_puertos([0, 0, 0], [100, 0, 0], {"inicio": {"normal": [-1, 0, 0], "tramo_mm": 50.0},
+                                                      "fin": {"normal": [1, 0, 0], "tramo_mm": 50.0}})
+
+
+def test_la_simplificacion_no_se_come_los_tramos_rectos_y_la_curva_sale_por_la_normal():
+    ruta_astar = [[100, 0, 0], [100, 150, 0], [400, 200, 0]]               # del fin del tramo 1 al inicio del tramo 2
+    curva, info = cr.construir_curva(ruta_astar, [], 45.0, 20.0, 5.0, prefijo=[[0, 0, 0]], sufijo=[[400, 300, 0]])
+    # sin obstaculos la simplificacion deja solo los extremos, pero los tramos deben seguir ahi
+    assert info["vertices_simplificada"] == 4 and info["factible"]
+    assert np.allclose(curva[0], [0, 0, 0]) and np.allclose(curva[-1], [400, 300, 0])
+    primera = curva[curva[:, 0] < 40.0]                                    # el arranque va por el eje X, sin desviarse
+    assert np.allclose(primera[:, 1], 0.0, atol=1e-6)
+
+
+def test_ducto_desde_entorno_con_puertos_corre_el_astar_entre_los_extremos_de_los_tramos_y_pasa_rectos_al_cad(monkeypatch):
+    modulo = types.ModuleType("ruteo_astar")
+    visto = {}
+
+    def calculo_ruta(inicio, fin, cfg=None):
+        visto.update(inicio=list(inicio), fin=list(fin))
+        return {"ruta": [list(inicio), list(fin)], "longitud_mm": 1.0, "estado": "ok", "bloques_cercanos": [], "mensaje": ""}
+
+    modulo.calculo_ruta, modulo.listar_bloques = calculo_ruta, (lambda: [])
+    modulo.distancia_seguridad_mm = lambda tipo, valor: 0.0
+    monkeypatch.setitem(sys.modules, "ruteo_astar", modulo)
+    capturado = {}
+    monkeypatch.setattr(cr, "generar_ducto", lambda ruta, a, h, e, **kw: capturado.update(kw, ruta=ruta) or {"nombre": "x"})
+    puertos = {"inicio": {"normal": [-1, 0, 0], "tramo_mm": 110.0, "seccion_constante_mm": 80.0},
+               "fin": {"normal": [0, 1, 0], "tramo_mm": 100.0, "seccion_constante_mm": 80.0}}
+
+    rep = cr.ducto_desde_entorno([0, 0, 0], [400, 300, 0], 60.0, 40.0, 2.0, parametros={"r_min_mm": 45.0}, puertos=puertos)
+
+    assert np.allclose(visto["inicio"], [110, 0, 0]) and np.allclose(visto["fin"], [400, 200, 0])
+    assert capturado["rectos_mm"] == (80.0, 80.0) and rep["tramos_rectos_mm"] == [110.0, 100.0]
+    curva = capturado["curva"]
+    assert np.allclose(curva[0], [0, 0, 0]) and np.allclose(curva[-1], [400, 300, 0])
+    # el ducto llega al puerto final por su normal (eje Y): el ultimo tramo es vertical
+    ultimos = curva[curva[:, 1] > 255.0]
+    assert np.allclose(ultimos[:, 0], 400.0, atol=1e-6)
+    # sin puertos todo es como antes
+    capturado.clear()
+    rep2 = cr.ducto_desde_entorno([0, 0, 0], [400, 300, 0], 60.0, 40.0, 2.0, parametros={"r_min_mm": 45.0})
+    assert capturado["rectos_mm"] is None and "tramos_rectos_mm" not in rep2 and visto["inicio"] == [0, 0, 0]
+
+
+def test_construir_curva_sin_simplificar_respeta_los_vertices_y_simplificando_sin_bloques_da_una_recta():
+    ruta = [[0, 0, 0], [200, 0, 0], [200, 150, 0], [400, 150, 0]]
+    _, simple = cr.construir_curva(ruta, [], 45.0, 20.0, 5.0)
+    _, tal_cual = cr.construir_curva(ruta, [], 45.0, 20.0, 5.0, simplificar=False)
+    assert simple["vertices_simplificada"] == 2 and tal_cual["vertices_simplificada"] == 4
+
+
+def test_ducto_desde_entorno_con_ruta_dada_no_corre_el_astar_y_usa_esa_ruta(monkeypatch):
+    modulo = types.ModuleType("ruteo_astar")
+    modulo.calculo_ruta = lambda *a, **k: (_ for _ in ()).throw(AssertionError("el A* no debia correr"))
+    modulo.listar_bloques, modulo.distancia_seguridad_mm = (lambda: []), (lambda tipo, valor: 0.0)
+    monkeypatch.setitem(sys.modules, "ruteo_astar", modulo)
+    capturado = {}
+    monkeypatch.setattr(cr, "generar_ducto", lambda ruta, a, h, e, **kw: capturado.update(kw, ruta=ruta) or {"nombre": "x"})
+    ruta = [[0, 0, 0], [200, 0, 0], [200, 150, 0], [400, 150, 0]]
+
+    rep = cr.ducto_desde_entorno([0, 0, 0], [400, 150, 0], 60.0, 40.0, 2.0, parametros={"r_min_mm": 45.0}, ruta_dada=ruta)
+
+    assert rep["estado"] == "ok" and rep["ruta_astar"]["longitud_mm"] == pytest.approx(200 + 150 + 200)
+    curva = capturado["curva"]
+    assert np.allclose(curva[0], [0, 0, 0]) and np.allclose(curva[-1], [400, 150, 0])
+    assert d.radios_de_curvatura(curva).min() >= 45.0
+    # la curva SIGUE el rodeo de la ruta dada (sin bloques, la simplificacion normal la volveria una recta)
+    recta = np.array([400.0, 150.0, 0.0]) / np.linalg.norm([400.0, 150.0, 0.0])
+    desvio = np.linalg.norm(curva - np.outer(curva @ recta, recta), axis=1)
+    assert desvio.max() > 40.0
+    assert rep["curva"]["vertices_simplificada"] == 4
+    with pytest.raises(ValueError):
+        cr.ducto_desde_entorno([0, 0, 0], [400, 150, 0], 60.0, 40.0, 2.0, ruta_dada=[[0, 0, 0]])

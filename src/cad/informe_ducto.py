@@ -39,11 +39,28 @@ def punto_3d(valor, nombre: str) -> list[float]:
     return p
 
 
-def propuesta_de_ducto(inicio, fin, ancho_mm: float, alto_mm: float, espesor_mm: float) -> dict:
+CAMPOS_SECCION_FIN = ("ancho_fin_mm", "alto_fin_mm")
+
+
+def propuesta_de_ducto(inicio, fin, ancho_mm: float, alto_mm: float, espesor_mm: float,
+                       ancho_fin_mm: float | None = None, alto_fin_mm: float | None = None) -> dict:
     """Aplana los argumentos a un dict {campo: float}: el formulario del humano solo maneja numeros planos
-    y, de paso, la deteccion de 'valores que no dijiste tu' revisa cada uno."""
+    y, de paso, la deteccion de 'valores que no dijiste tu' revisa cada uno. Los campos de la seccion final
+    solo aparecen si el ducto cambia de seccion (sin ellos la propuesta es la de siempre)."""
     i, f = punto_3d(inicio, "inicio"), punto_3d(fin, "fin")
-    return dict(zip(CAMPOS_PROPUESTA, [*i, *f, float(ancho_mm), float(alto_mm), float(espesor_mm)]))
+    if (ancho_fin_mm is None) != (alto_fin_mm is None):
+        raise ValueError("Para cambiar la seccion en el puerto final hay que dar ancho_fin_mm Y alto_fin_mm.")
+    p = dict(zip(CAMPOS_PROPUESTA, [*i, *f, float(ancho_mm), float(alto_mm), float(espesor_mm)]))
+    if ancho_fin_mm is not None:
+        p["ancho_fin_mm"], p["alto_fin_mm"] = float(ancho_fin_mm), float(alto_fin_mm)
+    return p
+
+
+def seccion_fin_de_propuesta(p: dict):
+    """(ancho_fin_mm, alto_fin_mm) de la propuesta, o (None, None) si el ducto es de seccion constante."""
+    if "ancho_fin_mm" in p and "alto_fin_mm" in p:
+        return p["ancho_fin_mm"], p["alto_fin_mm"]
+    return None, None
 
 
 def argumentos_de_propuesta(p: dict):
@@ -124,10 +141,24 @@ def texto_reporte(rep: dict, rutas_cad: list[str] | None = None) -> str:
     lineas = [
         f"Ducto '{rep['nombre']}' generado. Longitud {_n(rep['longitud_mm'])} mm, espesor {_n(rep['espesor_mm'])} mm, "
         f"volumen {_n(rep['volumen_mm3'])} mm3, solido valido: {'si' if rep['solido_valido'] else 'NO'}.",
-        f"Seccion: area {_n(sec['area_mm2'])} mm2, relacion de aspecto {_n(sec['relacion_aspecto'])}, "
+        f"Seccion{' (puerto inicial)' if rep.get('transicion') else ''}: area {_n(sec['area_mm2'])} mm2"
+        f"{' (interior, de paso del aire)' if sec.get('medida') == 'interior' else ''}, relacion de aspecto {_n(sec['relacion_aspecto'])}, "
         f"diametro hidraulico {_n(sec['diametro_hidraulico_mm'])} mm. "
         f"Area dentro de limites: {_si_no(sec.get('area_ok'))}; aspecto dentro del limite: {_si_no(sec.get('aspecto_ok'))}.",
     ]
+    tr = rep.get("transicion")
+    if tr:
+        sf = rep["seccion_fin"]
+        lineas.append(
+            f"TRANSICION DE SECCION ({tr['ley']}): del puerto inicial (area {_n(tr['area_inicio_mm2'])} mm2) al final "
+            f"(area {_n(sf['area_mm2'])} mm2, aspecto {_n(sf['relacion_aspecto'])}, D_h {_n(sf['diametro_hidraulico_mm'])} mm). "
+            f"Area a lo largo del ducto: de {_n(tr['area_min_mm2'])} a {_n(tr['area_max_mm2'])} mm2, "
+            f"dentro de limites: {_si_no(tr['area_ok'])}; aspecto max {_n(tr['relacion_aspecto_max'])}, "
+            f"dentro del limite: {_si_no(tr['aspecto_ok'])}. "
+            f"Cambio maximo de area por cada 50 mm: {_n(tr['cambio_max_de_area_por_50mm'] * 100)} %; "
+            f"semiangulo equivalente maximo de difusor: {_n(tr['semiangulo_difusor_max_grados'])} grados "
+            f"(contraccion: {_n(tr['semiangulo_contraccion_max_grados'])} grados)."
+        )
     if rad.get("radio_minimo_mm") is None:
         lineas.append("Radio de curvatura: ruta recta, sin curvas.")
     else:

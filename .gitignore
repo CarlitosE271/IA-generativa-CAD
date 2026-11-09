@@ -27,20 +27,6 @@ Thumbs.db
 *.swo
 
 
-# Documentos y geometria pesada (normas con copyright, mallas de decenas de MB)
-data/docs/
-data/geometria/
+# Documentos, geometrias, auditoria y demás archivos
+data/
 
-# Datos que se REGENERAN o son locales (no se versionan)
-# STEP/STL generados
-data/cad/
-# PNG de rutas y comparaciones
-data/salidas/
-# redes C_NN entrenadas (se reentrenan con scripts/entrenar_c_nn.py)
-data/modelos/
-# bitacora de aprobaciones: dato operativo con nombres, se respalda aparte
-data/auditoria/
-# estado de la sesion: cambia con cada aprobacion
-data/parametros_aprobados.json
-# copias temporales de scripts/escena_infactible.py
-data/entorno/*_respaldo.json

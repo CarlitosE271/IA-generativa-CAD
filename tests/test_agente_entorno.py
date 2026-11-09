@@ -161,6 +161,28 @@ def test_generar_ducto_pregunta_con_numeros_planos_y_luego_genera(monkeypatch):
     assert "47.25" in texto and "[ARCHIVO_CAD:" in texto and "ducto_x.step" in texto
 
 
+def test_generar_ducto_con_seccion_final_la_propone_la_aprueba_y_se_la_pasa_al_modelo_cad(monkeypatch, bitacora):
+    ag, llamadas, recibido = _preparar_generar(monkeypatch, {"decision": "approve"})
+    ag.generar_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2, ancho_fin_mm=80, alto_fin_mm=30)
+    assert llamadas[0]["propuesta"]["ancho_fin_mm"] == 80.0 and llamadas[0]["propuesta"]["alto_fin_mm"] == 30.0
+    assert recibido["ancho_fin_mm"] == 80.0 and recibido["alto_fin_mm"] == 30.0
+    ev = auditoria.leer(bitacora)[0][0]
+    assert ev["finales"]["ancho_fin_mm"] == 80.0  # lo aprobado queda en la bitacora, con la seccion final
+
+
+def test_generar_ducto_sin_seccion_final_no_la_propone_y_pasa_none(monkeypatch):
+    ag, llamadas, recibido = _preparar_generar(monkeypatch, {"decision": "approve"})
+    ag.generar_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2)
+    assert "ancho_fin_mm" not in llamadas[0]["propuesta"]
+    assert recibido["ancho_fin_mm"] is None and recibido["alto_fin_mm"] is None
+
+
+def test_generar_ducto_con_solo_la_mitad_de_la_seccion_final_pide_las_dos_sin_pausar(monkeypatch):
+    ag, llamadas, recibido = _preparar_generar(monkeypatch, {"decision": "approve"})
+    texto = ag.generar_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2, ancho_fin_mm=80)
+    assert "ancho_fin_mm Y alto_fin_mm" in texto and llamadas == [] and recibido == {}
+
+
 def test_generar_ducto_con_edicion_usa_los_valores_del_humano_y_se_lo_dice_al_llm(monkeypatch):
     ag, _, recibido = _preparar_generar(monkeypatch, {"decision": "edit", "valores": {"espesor_mm": 3.0}})
     texto = ag.generar_ducto([0, 0, 500], [2300, 0, 500], 40, 25, 2)

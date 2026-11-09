@@ -1,14 +1,14 @@
 """
-Convierte una escena de mallas (STL/STEP + escena.json) en bloques para el A* y, si quieres, la ACTIVA.
+Convierte una escena de mallas (STL/STEP + escena.json) en bloques para el A*
 
-Uso:
+Usos:
     python scripts/cargar_escena.py ejemplo                      # solo convierte y muestra el informe
-    python scripts/cargar_escena.py ejemplo --paso 15            # voxel de 15 mm (mas fiel, mas cajas)
-    python scripts/cargar_escena.py ejemplo --max-cajas 300      # permite mas cajas (el A* se vuelve mas lento)
+    python scripts/cargar_escena.py ejemplo --paso 15            # voxel de 15 mm
+    python scripts/cargar_escena.py ejemplo --max-cajas 300      # permite mas cajas
     python scripts/cargar_escena.py ejemplo --activar            # ademas deja la escena como entorno activo
 
-'nombre' es una carpeta de data/escenas/ (o una ruta a una carpeta con escena.json).
-Escribe en la carpeta de la escena:  entorno.json (los bloques)  e  informe.json (lo que se vera en pantalla).
+'nombre' es una carpeta de data/escenas/.
+Escribe en la carpeta de la escena en entorno.json (los bloques) e informe.json (lo que se vera en pantalla).
 --activar copia entorno.json a data/entorno/entorno.json, guardando antes una copia del entorno actual
 (data/entorno/entorno_<fecha>_respaldo.json) para no perder el que habia.
 """

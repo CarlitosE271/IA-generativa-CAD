@@ -1,5 +1,5 @@
 """
-Entorno de bloques y ruteo con A* en 3D (solo libreria estandar).
+Entorno de bloques y ruteo con A* en 3D.
 Todo va en mm. Los bloques se guardan en data/entorno/entorno.json.
 
 Funciones: agregar_bloque, listar_bloques, eliminar_bloque,

@@ -1,13 +1,13 @@
 """
-Carga una escena de prueba en la que un R_min grande es INFACTIBLE, para probar en el chat el flujo
-"el agente anuncia el problema, propone y tu decides". Guarda un respaldo de tu entorno para no perderlo.
+Carga una escena de prueba en la que un R_min grande es infactible, para probar en el chat el flujo donde
+el agente anuncia el problema, propone y el usuario decide. Guarda un respaldo de tu entorno para no perderlo.
 
 Uso, desde la raiz del proyecto:
-  python scripts/escena_infactible.py              # respalda tu entorno y carga la escena de dos muros
+  python scripts/escena_infactible.py              # respalda el entorno y carga la escena de dos muros
   python scripts/escena_infactible.py --restaurar  # devuelve tu entorno original
 
-La escena: dos muros altos desfasados (P1 y P2) entre el inicio [0,0,0] y el fin [1500,0,0], que obligan a
-una "S". Con la seccion 40x25 mm: R_min <= ~178 mm si cabe; R_min = 600 mm NO cabe.
+La escena original consta de dos muros altos desfasados (P1 y P2) entre el inicio [0,0,0] y el fin [1500,0,0], que obligan a
+una "S".
 """
 import shutil
 import sys

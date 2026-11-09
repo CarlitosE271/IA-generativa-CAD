@@ -1,12 +1,5 @@
 """
-Crea una escena de EJEMPLO en data/escenas/ejemplo/ (mallas STL sinteticas + escena.json).
-
-Sirve para dos cosas:
-  1. Probar la ingesta de mallas sin esperar la geometria de Maikol:
-        python scripts/crear_escena_ejemplo.py
-        python scripts/cargar_escena.py ejemplo
-  2. Ser el MODELO del formato que Maikol debe entregar (un archivo por componente + escena.json).
-
+Crea una escena de ejemplo en data/escenas/ejemplo/.
 Uso:  python scripts/crear_escena_ejemplo.py [--forzar]
 """
 import argparse
@@ -34,9 +27,9 @@ def main() -> int:
     carpeta.mkdir(parents=True, exist_ok=True)
 
     mallas = {
-        "motor.stl": im.malla_cilindro((1300, 0, 250), 260, 500, 48),              # cilindro: una caja lo sobreestimaria
+        "motor.stl": im.malla_cilindro((1300, 0, 250), 260, 500, 48),              # cilindro pues una caja lo sobreestimaria
         "bateria.stl": im.malla_cilindro((600, 300, 150), 110, 250, 32),
-        "soporte.stl": np.concatenate([                                            # una L: el hueco debe quedar libre
+        "soporte.stl": np.concatenate([                                            # una L para que el hueco quede libre
             im.malla_caja((300, -400, 0), (900, -300, 300)),
             im.malla_caja((300, -400, 0), (400, 100, 300)),
         ]),

@@ -1,19 +1,12 @@
 """
-Entrena C_NN (Keras REAL) sobre tu entorno de bloques y compara rutas del A* con y sin el campo de costo.
+Entrena C_NN (Keras REAL) sobre el entorno de bloques y compara rutas del A* con y sin el campo de costo.
 
 Uso, desde la raiz del proyecto:
-  python scripts/entrenar_c_nn.py                          # inicio [0,0,500] -> fin [2300,0,500]
-  python scripts/entrenar_c_nn.py 0 0 500  2300 0 500      # o tus puntos x0 y0 z0 x1 y1 z1
+  python scripts/entrenar_c_nn.py              
+  python scripts/entrenar_c_nn.py 0 0 500  2300 0 500      # o los puntos x0 y0 z0 x1 y1 z1
 
-Requiere el A* con el parche campo_costo (parches/ruteo_astar_con_campo_costo.py): si tu ruteo_astar.py todavia
-no lo tiene, el script te lo dice y se detiene. Genera data/modelos/c_nn_<hash>.keras (se reusa mientras no
-muevas los bloques) y data/salidas/comparacion_c_nn.png.
-
-COMO LEER EL RESULTADO (importante para defenderlo):
-  - "R2 / MAE" miden que tan bien la red reproduce el MAESTRO sintetico en puntos NUEVOS. Es validacion de la
-    tuberia, no de la fisica: el maestro lo escribimos nosotros (costos/campo_costo.py, PESOS_MAESTRO).
-  - "dist min a termico/electrico" es geometria pura (no depende del maestro): es la comparacion honesta.
-  - "costo medio (maestro)" es el mismo criterio que el campo optimiza: por construccion tiene que bajar.
+Requiere el A* con el parche campo_costo (parches/ruteo_astar_con_campo_costo.py)
+Genera data/modelos/c_nn_<hash>.keras (se reusa mientras no se muevan los bloques) y data/salidas/comparacion_c_nn.png.
 """
 import inspect
 import math
@@ -39,7 +32,7 @@ if "campo_costo" not in inspect.signature(r.calculo_ruta).parameters:
 
 argumentos = [float(a) for a in sys.argv[1:]]
 INICIO, FIN = (argumentos[:3], argumentos[3:6]) if len(argumentos) == 6 else ([0, 0, 500], [2300, 0, 500])
-RADIO = math.hypot(40.0, 25.0) / 2.0  # envolvente de la seccion 40x25 mm
+RADIO = math.hypot(40.0, 25.0) / 2.0 
 
 print(f"Entorno: {[b['nombre'] for b in bloques]}")
 print("Entrenando C_NN con Keras (la primera vez tarda; despues se reusa)...")
@@ -77,7 +70,7 @@ for nombre, campo, lam in VARIANTES:
     resultados[nombre] = res["ruta"]
     print(f"{nombre:14} {m['largo']:9.0f} {m['vertices']:5d} {m['term']:17.0f} {m['elec']:19.0f} {m['costo']:22.3f}")
 
-try:  # figura vista desde arriba (x-y); matplotlib es opcional
+try:  # figura vista desde arriba (x-y)
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt

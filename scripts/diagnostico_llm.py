@@ -1,22 +1,24 @@
 """
-Experimento controlado, ronda 3: encontrar el prompt MAS LARGO que llama3.1 aguanta, agregando reglas de
-una en una (biseccion), y probar una alternativa de ingenieria: que las herramientas de lectura devuelvan
-su texto DIRECTO al usuario, sin que el modelo lo vuelva a redactar (return_direct).
+Encontrar el prompt más largo que llama3.1 aguanta, agregando reglas de
+una en una, y probar una alternativa de ingenieria, que las herramientas de lectura devuelvan
+su texto directo al usuario, sin que el modelo lo vuelva a redactar (return_direct).
 
-Uso, desde la raiz del proyecto (Ollama encendido):   python scripts/diagnostico_llm.py
-Solo preguntas de LECTURA (no pausan ni escriben nada). Tarda ~5 min. Pega la tabla final.
+Uso, desde la raiz del proyecto (se necesita que Ollama este  encendido):   
+    python scripts/diagnostico_llm.py
 
-Lo que se sabe de las rondas 1 y 2 (una corrida por celda, asi que es indicio, no prueba):
+Lo que se sabe de rondas de prueba anteriores:
   - prompt actual (largo) + nota: falla. prompt_corto + nota: 3/3 ok.
   - prompt nuevo (mediano) con nota larga O corta: sigue fallando en "que bloques hay".
-Variantes (la nota es la de [Contexto interno] salvo que se diga "sin nota"):
+
+  Variantes:
   base         prompt_corto                                   (control: debe estar ok)
   +params      base + reglas de registrar/actualizar/consultar parametros
   +honestidad  +params + "valores vigentes" y "nunca digas que hiciste algo sin ejecutarlo"
   +entorno     +honestidad + reglas de entorno/ruta/ducto/infactible (= prompt "nuevo")
   +entorno_sn  igual que +entorno pero SIN nota                -> ¿la nota importa con el prompt largo?
   directo      +entorno, y consultar_entorno/calcular_ruta con return_direct (el modelo no re-redacta)
-Veredictos: ok (trae datos) | VACIA (suena bien pero sin datos) | INUTIL (disculpa/vacio)
+
+  Veredictos: ok (trae datos) | VACIA (suena bien pero sin datos) | INUTIL (disculpa/vacio)
 """
 import json
 import re
